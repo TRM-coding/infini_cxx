@@ -6,12 +6,19 @@ template<class T>
 struct Tensor4D {
     unsigned int shape[4];
     T *data;
+    unsigned int this_stride[4];
 
     Tensor4D(unsigned int const shape_[4], T const *data_) {
         unsigned int size = 1;
         // TODO: 填入正确的 shape 并计算 size
+        for (int i = 0; i < 4; i++) shape[i] = shape_[i];
+        for (int i = 0; i < 4; i++) size *= shape[i];
         data = new T[size];
         std::memcpy(data, data_, size * sizeof(T));
+        this_stride[3]=shape[3]==1?0:1;
+        this_stride[2]=shape[2]==1?0:shape[3];
+        this_stride[1]=shape[1]==1?0:shape[3]*shape[2];
+        this_stride[0]=shape[0]==1?0:shape[3]*shape[2]*shape[1];
     }
     ~Tensor4D() {
         delete[] data;
@@ -27,7 +34,35 @@ struct Tensor4D {
     // 例如，`this` 形状为 `[1, 2, 3, 4]`，`others` 形状为 `[1, 2, 1, 4]`，
     // 则 `this` 与 `others` 相加时，3 个形状为 `[1, 2, 1, 4]` 的子张量各自与 `others` 对应项相加。
     Tensor4D &operator+=(Tensor4D const &others) {
+        int other_stride[4];
+        other_stride[3]=others.shape[3]==1?0:1;
+        other_stride[2]=others.shape[2]==1?0:others.shape[3];
+        other_stride[1]=others.shape[1]==1?0:others.shape[3]*others.shape[2];
+        other_stride[0]=others.shape[0]==1?0:others.shape[3]*others.shape[2]*others.shape[1];
         // TODO: 实现单向广播的加法
+        for(unsigned int i0=0;i0<shape[0];i0++)
+        {
+            int off_i0_this=i0*this_stride[0];
+            int off_i0_other=i0*other_stride[0];
+            for(unsigned int i1=0;i1<shape[1];i1++)
+            {
+                unsigned int off_i1_this=i1*this_stride[1];
+                unsigned int off_i1_other=i1*other_stride[1];
+                for(unsigned int i2=0;i2<shape[2];i2++)
+                {
+                    unsigned int off_i2_this=i2*this_stride[2];
+                    unsigned int off_i2_other=i2*other_stride[2];
+                    for(unsigned int i3=0;i3<shape[3];i3++)
+                    {
+                        unsigned int off_i3_this=i3*this_stride[3];
+                        unsigned int off_i3_other=i3*other_stride[3];
+                        auto off_this=this->data+off_i0_this+off_i1_this+off_i2_this+off_i3_this;
+                        auto off_other=others.data+off_i0_other+off_i1_other+off_i2_other+off_i3_other;
+                        *off_this+=*off_other;
+                    }
+                }
+            }
+        }
         return *this;
     }
 };

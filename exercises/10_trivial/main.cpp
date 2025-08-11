@@ -3,15 +3,18 @@
 // READ: Trivial type <https://learn.microsoft.com/zh-cn/cpp/cpp/trivial-standard-layout-and-pod-types?view=msvc-170>
 
 struct FibonacciCache {
-    unsigned long long cache[16];
-    int cached;
+    unsigned long long cache[16]={0,1};
+    int cached=2;
 };
 
 // TODO: 实现正确的缓存优化斐波那契计算
 static unsigned long long fibonacci(FibonacciCache &cache, int i) {
-    for (; false; ++cached) {
-        cache[cached] = cache[cached - 1] + cache[cached - 2];
+    auto& cached=cache.cached;
+    
+    for (; cached<16; ++cached) {
+        cache.cache[cached] = cache.cache[cached - 1] + cache.cache[cached - 2];
     }
+    std::cout<<cache.cache[i]<<std::endl;
     return cache.cache[i];
 }
 
