@@ -1,0 +1,14 @@
+{
+  "files.associations": {
+    "*.json": "jsonc",
+    "*.cuh": "cuda-cpp",
+    "*.cu": "cuda-cpp",
+    "__locale": "cpp",
+    "ios": "cpp"
+  },
+  "C_Cpp.default.compilerPath": "/usr/local/cuda/bin/nvcc",
+  "C_Cpp.errorSquiggles": "enabled",
+  "makefile.configureOnOpen": true,
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "ms-vscode.cpptools"
+}
