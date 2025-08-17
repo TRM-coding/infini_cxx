@@ -1,19 +1,25 @@
 {
-  "version": 4,
-  "configurations": [
-    {
-      "name": "Linux",
-      "configurationProvider": "ms-vscode.cmake-tools",
-      "includePath": [
-        "${workspaceFolder}/src",
-        "${workspaceFolder}/tester",
-        "/usr/local/cuda/include"
-      ],
-      "defines": [],
-      "compilerPath": "/usr/local/cuda/bin/nvcc",
-      "cStandard": "c17",
-      "cppStandard": "c++17",
-      "intelliSenseMode": "linux-gcc-x64"
-    }
-  ]
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/src",
+                "${workspaceFolder}/tester",
+                "/usr/local/cuda/include",
+                "/usr/include",
+                "/usr/include/c++/**"
+            ],
+            "defines": [
+                "__CUDACC__",
+                "__CUDA_ARCH__=750"
+            ],
+            "compilerPath": "/usr/local/cuda/bin/nvcc",
+            "cStandard": "c17",
+            "cppStandard": "c++14",
+            "intelliSenseMode": "linux-gcc-x64",
+            "configurationProvider": "ms-vscode.cmake-tools"
+        }
+    ],
+    "version": 4
 }

@@ -4,7 +4,9 @@
 #include <cassert>
 #include <cfloat>
 #include <math_constants.h>
-#include<cmath>
+#include <cmath>
+#include <algorithm>
+#include <cuda_runtime.h>
 /**
  * @brief Find the k-th largest element in a vector using CUDA.
  *
@@ -58,8 +60,8 @@ __device__ void iterative_merge_sort(T *data, size_t n, T *temp)
     {
         for (size_t left_start = 0; left_start < n - 1; left_start += 2 * curr_size)
         {
-            size_t mid = min(left_start + curr_size - 1, n - 1);
-            size_t right_end = min(left_start + 2 * curr_size - 1, n - 1);
+            size_t mid = fminf(left_start + curr_size - 1, n - 1);
+            size_t right_end = fminf(left_start + 2 * curr_size - 1, n - 1);
 
             if (mid < right_end)
             {
@@ -211,7 +213,7 @@ __global__ void flashAttentionKernel(
     }
 
 
-    T max_score = -CUDART_INF_F;
+    T max_score = -FLT_MAX;
 
     for (int src_idx = 0; src_idx < src_seq_len; src_idx++)
     {
@@ -229,7 +231,7 @@ __global__ void flashAttentionKernel(
             score += current_q[d] * current_k[d];
         }
  
-        score /= std::sqrt((T)head_dim);
+        score /= sqrtf((T)head_dim);
 
         max_score = max_score> score?max_score:score;
     }
@@ -253,9 +255,9 @@ __global__ void flashAttentionKernel(
             score += current_q[d] * current_k[d];
         }
 
-        score /= std::sqrt((T)head_dim);
+        score /= sqrtf((T)head_dim);
 
-        T exp_score = std:: exp(score - max_score);
+        T exp_score = expf(score - max_score);
         sum_exp += exp_score;
 
         for (int d = 0; d < head_dim; d++)
@@ -278,13 +280,13 @@ void flashAttention(const std::vector<T> &h_q, const std::vector<T> &h_k,
                     int query_heads, int kv_heads, int head_dim, bool is_causal)
 {
     cudaSetDevice(6);
-    // std::cout<<"batch_size:"<<batch_size<<std::endl
-    // <<"target_seq_len:"<<target_seq_len<<std::endl
-    // <<"src_seq_len:"<<src_seq_len<<std::endl
-    // <<"query_head:"<<query_heads<<std::endl
-    // <<"kv_head:"<<kv_heads<<std::endl
-    // <<"head_dim:"<<head_dim<<std::endl
-    // <<"is_causual:"<<is_causal<<std::endl;
+    std::cout<<"batch_size:"<<batch_size<<std::endl
+    <<"target_seq_len:"<<target_seq_len<<std::endl
+    <<"src_seq_len:"<<src_seq_len<<std::endl
+    <<"query_head:"<<query_heads<<std::endl
+    <<"kv_head:"<<kv_heads<<std::endl
+    <<"head_dim:"<<head_dim<<std::endl
+    <<"is_causual:"<<is_causal<<std::endl;
 
     // std::cout<<"h_o_size:"<<h_o.size()<<std::endl;
 
@@ -294,7 +296,7 @@ void flashAttention(const std::vector<T> &h_q, const std::vector<T> &h_k,
     }
 
     int a;
-    // std::cin>>a;
+    std::cin>>a;
     for(auto p :h_q)
     {
         // std::cout<<p<<" ";

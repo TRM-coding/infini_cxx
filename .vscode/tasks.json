@@ -1,46 +1,48 @@
 {
-  "version": "2.0.0",
-  "tasks": [
-    {
-      "type": "shell",
-      "label": "Build (make)",
-      "command": "make",
-      "args": ["build"],
-      "group": { "kind": "build", "isDefault": true },
-      "problemMatcher": ["$gcc"],
-      "detail": "Compile CUDA kernels and link tester object"
-    },
-    {
-      "type": "shell",
-      "label": "Build & Run Tests",
-      "command": "make",
-  "group": "test",
-      "problemMatcher": ["$gcc"],
-      "detail": "Build then run tests (default 'all' target)"
-    },
-    {
-      "type": "shell",
-      "label": "Run Tests (non-verbose)",
-      "command": "make",
-      "args": ["run"],
-      "problemMatcher": [],
-      "detail": "Run existing executable with tests"
-    },
-    {
-      "type": "shell",
-      "label": "Run Tests (verbose)",
-      "command": "make",
-      "args": ["run", "VERBOSE=true"],
-      "problemMatcher": [],
-      "detail": "Run tests in verbose mode"
-    },
-    {
-      "type": "shell",
-      "label": "Clean",
-      "command": "make",
-      "args": ["clean"],
-      "problemMatcher": [],
-      "detail": "Remove build artifacts"
-    }
-  ]
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build cuda main",
+            "type": "shell",
+            "command": "nvcc",
+            "args": [
+                "-o",
+                "${workspaceFolder}/main",
+                "${workspaceFolder}/main.cu",
+                "-std=c++14",
+                "-arch=sm_75",
+                "-I${workspaceFolder}",
+                "-I${workspaceFolder}/src",
+                "-I${workspaceFolder}/tester"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "run cuda main",
+            "type": "shell",
+            "command": "${workspaceFolder}/main",
+            "args": [],
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "dependsOn": "build cuda main"
+        }
+    ]
 }
