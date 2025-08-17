@@ -4,8 +4,12 @@
         {
             "label": "build cuda main",
             "type": "shell",
-            "command": "nvcc",
+            "command": "srun",
             "args": [
+                "--gres=gpu:nvidia:2",
+                "--cpus-per-task=16",
+                "--mem=256G",
+                "nvcc",
                 "-o",
                 "${workspaceFolder}/main",
                 "${workspaceFolder}/main.cu",
@@ -25,13 +29,18 @@
                 "focus": false,
                 "panel": "shared"
             },
-            "problemMatcher": ["$gcc"]
+            "problemMatcher": ["$nvcc"]
         },
         {
             "label": "run cuda main",
             "type": "shell",
-            "command": "${workspaceFolder}/main",
-            "args": [],
+            "command": "srun",
+            "args": [
+                "--gres=gpu:nvidia:2",
+                "--cpus-per-task=16",
+                "--mem=256G",
+                "${workspaceFolder}/main"
+            ],
             "group": {
                 "kind": "test",
                 "isDefault": true
@@ -43,6 +52,95 @@
                 "panel": "shared"
             },
             "dependsOn": "build cuda main"
+        },
+        {
+            "label": "generate test data",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "maker.py"
+            ],
+            "group": "test",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "run python tester",
+            "type": "shell",
+            "command": "srun",
+            "args": [
+                "--gres=gpu:nvidia:2",
+                "--cpus-per-task=16",
+                "--mem=256G",
+                "python",
+                "tester.py"
+            ],
+            "group": "test",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "dependsOn": "generate test data"
+        },
+        {
+            "label": "run cuda with test data",
+            "type": "shell",
+            "command": "srun",
+            "args": [
+                "--gres=gpu:nvidia:2",
+                "--cpus-per-task=16",
+                "--mem=256G",
+                "${workspaceFolder}/main"
+            ],
+            "group": "test",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "dependsOn": [
+                "build cuda main",
+                "run python tester"
+            ]
+        },
+        {
+            "label": "compare outputs",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "compare.py"
+            ],
+            "group": "test",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "dependsOn": "run cuda with test data"
+        },
+        {
+            "label": "full test cycle",
+            "type": "shell",
+            "command": "echo",
+            "args": [
+                "Full test cycle completed!"
+            ],
+            "group": "test",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "dependsOn": "compare outputs"
         }
     ]
 }

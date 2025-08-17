@@ -61,6 +61,11 @@
         "thread": "cpp",
         "typeinfo": "cpp",
         "variant": "cpp",
-        "__nullptr": "cpp"
+        "__nullptr": "cpp",
+        "map": "cpp",
+        "set": "cpp",
+        "expected": "cpp",
+        "fstream": "cpp",
+        "cinttypes": "cpp"
     }
 }
