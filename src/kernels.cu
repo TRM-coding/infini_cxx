@@ -1,12 +1,15 @@
 #include <vector>
 #include <iostream>
+#include <fstream>
 #include "../tester/utils.h"
 #include <cassert>
 #include <cfloat>
 #include <math_constants.h>
-#include <cmath>
+// #include <cmath>
 #include <algorithm>
 #include <cuda_runtime.h>
+#include <iomanip>
+// #define double long double
 /**
  * @brief Find the k-th largest element in a vector using CUDA.
  *
@@ -132,7 +135,7 @@ T kthLargest(const std::vector<T> &h_input, size_t k)
         return T(-100);
     }
     // TODO: Implement the kthLargest function
-    const int device = 6;
+    const int device = 0;
     cudaSetDevice(device);
     T *data = nullptr;
     T *ans = new T;
@@ -147,11 +150,39 @@ T kthLargest(const std::vector<T> &h_input, size_t k)
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, device));
     KernelKthLargest<<<1, 1>>>(data, cudaans, size_t(h_input.size()), k, temp);
-    CUDA_CHECK(cudaGetLastError()); 
+    CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
     CUDA_CHECK(cudaMemcpy(ans, cudaans, sizeof(T), cudaMemcpyDeviceToHost));
     return *ans;
 }
+
+template<typename T>
+__device__ void softmax(T* vec,int len)
+{
+    double sum_exp = 0.0f;
+    double max_score = -CUDART_INF_F;
+    for (int s = 0; s < len; ++s)
+    {
+        max_score = fmax(max_score, vec[s]);
+    }
+
+    for (int s = 0; s < len; ++s)
+    {
+        if (vec[s] == -CUDART_INF_F)
+        {
+            vec[s] = 0;
+            continue;
+        }
+        vec[s] = exp(vec[s] - max_score);
+        sum_exp += vec[s];
+    }
+
+    for (int s = 0; s < len; ++s)
+    {
+        vec[s] /= sum_exp;
+    }
+}
+
 
 /**
  * @brief Computes simple attention for given query, key, and value tensors.
@@ -170,7 +201,9 @@ T kthLargest(const std::vector<T> &h_input, size_t k)
  * @param[in] is_causal Whether to apply causal masking
  */
 
-// Flash Attention CUDA kernel - supports grouped query attention
+
+
+// Standard Attention CUDA kernel - supports grouped query attention
 template <typename T>
 __global__ void flashAttentionKernel(
     const T *q, const T *k, const T *v, T *o,
@@ -179,7 +212,8 @@ __global__ void flashAttentionKernel(
 {
     int batch_idx = blockIdx.z;
     int query_head_idx = blockIdx.y;
-    int target_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    // int target_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int target_idx = threadIdx.x;
 
     if (batch_idx >= batch_size || query_head_idx >= query_heads || target_idx >= target_seq_len)
     {
@@ -187,9 +221,9 @@ __global__ void flashAttentionKernel(
     }
 
     int kv_head_idx;
-    
-    kv_head_idx = (query_head_idx * kv_heads) / query_heads; 
-    
+
+    kv_head_idx = (query_head_idx * kv_heads) / query_heads;
+
     int q_batch_offset = batch_idx * query_heads * target_seq_len * head_dim;
     int k_batch_offset = batch_idx * kv_heads * src_seq_len * head_dim;
     int v_batch_offset = batch_idx * kv_heads * src_seq_len * head_dim;
@@ -199,79 +233,56 @@ __global__ void flashAttentionKernel(
     int kv_head_offset = kv_head_idx * src_seq_len * head_dim;
     int o_head_offset = query_head_idx * target_seq_len * head_dim;
 
-    
     const T *current_q = q + q_batch_offset + q_head_offset + target_idx * head_dim;
     const T *current_k_base = k + k_batch_offset + kv_head_offset;
     const T *current_v_base = v + v_batch_offset + kv_head_offset;
     T *current_o = o + o_batch_offset + o_head_offset + target_idx * head_dim;
 
-    T output[512];
+    double scale_factor = 1.0 / sqrt((double)head_dim);
 
-    for (int d = 0; d < head_dim; d++)
+    double attn_scores[2048];
+
+    for (int s = 0; s < src_seq_len; ++s)
     {
-        output[d] = 0;
+        const T *kp = current_k_base + s * head_dim;
+
+        double score = 0.0f;
+        for (int d = 0; d < head_dim; ++d)
+        {
+            score += (double)current_q[d] * (double)kp[d];
+        }
+
+        attn_scores[s] = score * scale_factor;
     }
 
-
-    T max_score = -FLT_MAX;
-
-    for (int src_idx = 0; src_idx < src_seq_len; src_idx++)
+    if (is_causal)
     {
-        if (is_causal && src_idx > target_idx)
+        for (int s = 0; s < src_seq_len; ++s)
         {
-            continue;
+            if (s > target_idx)
+            {
+                attn_scores[s] = -CUDART_INF_F;
+            }
         }
-
-        const T *current_k = current_k_base + src_idx * head_dim;
-
-        // Q * K^T
-        T score = 0;
-        for (int d = 0; d < head_dim; d++)
-        {
-            score += current_q[d] * current_k[d];
-        }
- 
-        score /= sqrtf((T)head_dim);
-
-        max_score = max_score> score?max_score:score;
     }
 
-    T sum_exp = 0;
-
-    for (int src_idx = 0; src_idx < src_seq_len; src_idx++)
-    {
-        if (is_causal && src_idx > target_idx)
-        {
-            continue;
-        }
-
-        const T *current_k = current_k_base + src_idx * head_dim;
-        const T *current_v = current_v_base + src_idx * head_dim;
-
-        // Q * K^T
-        T score = 0;
-        for (int d = 0; d < head_dim; d++)
-        {
-            score += current_q[d] * current_k[d];
-        }
-
-        score /= sqrtf((T)head_dim);
-
-        T exp_score = expf(score - max_score);
-        sum_exp += exp_score;
-
-        for (int d = 0; d < head_dim; d++)
-        {
-            output[d] += exp_score * current_v[d];
-        }
-    }
     
-    for (int d = 0; d < head_dim; d++)
+
+    softmax(attn_scores, src_seq_len);
+
+    for (int d = 0; d < head_dim; ++d)
     {
-        current_o[d] = output[d] / sum_exp;
+        double output_val = 0.0f;
+        for (int s = 0; s < src_seq_len; ++s)
+        {
+            const T *vp = current_v_base + s * head_dim;
+            output_val += attn_scores[s] * (double)vp[d];
+        }
+        current_o[d] = output_val;
     }
-    
 }
+
+int idx = 0;
 
 template <typename T>
 void flashAttention(const std::vector<T> &h_q, const std::vector<T> &h_k,
@@ -279,47 +290,54 @@ void flashAttention(const std::vector<T> &h_q, const std::vector<T> &h_k,
                     int batch_size, int target_seq_len, int src_seq_len,
                     int query_heads, int kv_heads, int head_dim, bool is_causal)
 {
-    cudaSetDevice(6);
-    // std::cout<<"batch_size:"<<batch_size<<std::endl
-    // <<"target_seq_len:"<<target_seq_len<<std::endl
-    // <<"src_seq_len:"<<src_seq_len<<std::endl
-    // <<"query_head:"<<query_heads<<std::endl
-    // <<"kv_head:"<<kv_heads<<std::endl
-    // <<"head_dim:"<<head_dim<<std::endl
-    // <<"is_causual:"<<is_causal<<std::endl;
-
-    // std::cout<<"h_o_size:"<<h_o.size()<<std::endl;
-
-    // if(query_heads%kv_heads!=0)
-    // {
-    //     std::cout<<"bad heads"<<std::endl;
-    // }
-
-    int a;
-    // std::cin>>a;
-    for(auto p :h_q)
-    {
-        // std::cout<<p<<" ";
-    }
-    // std::cout<<std::endl;
-
+    cudaSetDevice(0);
     size_t q_size = h_q.size();
     size_t k_size = h_k.size();
     size_t v_size = h_v.size();
     size_t o_size = h_o.size();
 
-    T *d_q, *d_k, *d_v, *d_o;
+    // std::ofstream f("out/" + std::to_string(idx++) + ".txt");
+    // f << std::fixed << std::setprecision(7);
+    // f << batch_size << " " << target_seq_len << " " << src_seq_len << " " << kv_heads << " " << query_heads << " " << head_dim << " " << (is_causal ? 1 : 0) << std::endl;
+    // for (auto x : h_q)
+    // {
+    //     f << x << " ";
+    // }
+    // f << std::endl;
+    // for (auto x : h_k)
+    // {
+    //     f << x << " ";
+    // }
+    // f << std::endl;
+    // for (auto x : h_v)
+    // {
+    //     f << x << " ";
+    // }
+    // f << std::endl;
+    // f << std::fixed << std::setprecision(12) << "\n";
+    // for (auto x : h_q)
+    // {
+    //     f << x << " ";
+    // }
+    // f.close();
 
-    CUDA_CHECK(cudaMalloc(&d_q, q_size * sizeof(T)));
-    CUDA_CHECK(cudaMalloc(&d_k, k_size * sizeof(T)));
-    CUDA_CHECK(cudaMalloc(&d_v, v_size * sizeof(T)));
-    CUDA_CHECK(cudaMalloc(&d_o, o_size * sizeof(T)));
+    std::vector<double> hk, hv, hq, ho;
 
-    
-    CUDA_CHECK(cudaMemcpy(d_q, h_q.data(), q_size * sizeof(T), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(d_k, h_k.data(), k_size * sizeof(T), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(d_v, h_v.data(), v_size * sizeof(T), cudaMemcpyHostToDevice));
+    for(auto x:h_k)hk.push_back(static_cast<double>(x));
+    for(auto x:h_q)hq.push_back(static_cast<double>(x));
+    for(auto x:h_v)hv.push_back(static_cast<double>(x));
+    ho.resize(h_o.size());
 
+    double *d_q, *d_k, *d_v,*d_o;
+
+    CUDA_CHECK(cudaMalloc(&d_q, q_size * sizeof(double)));
+    CUDA_CHECK(cudaMalloc(&d_k, k_size * sizeof(double)));
+    CUDA_CHECK(cudaMalloc(&d_v, v_size * sizeof(double)));
+    CUDA_CHECK(cudaMalloc(&d_o, o_size * sizeof(double)));
+
+    CUDA_CHECK(cudaMemcpy(d_q, hq.data(), q_size * sizeof(double), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_k, hk.data(), k_size * sizeof(double), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_v, hv.data(), v_size * sizeof(double), cudaMemcpyHostToDevice));
 
     int threads_per_block = 1024;
 
@@ -330,7 +348,6 @@ void flashAttention(const std::vector<T> &h_q, const std::vector<T> &h_k,
         batch_size                                                    // z: batch size
     );
 
-    // Launch kernel
     flashAttentionKernel<<<grid_size, block_size>>>(
         d_q, d_k, d_v, d_o,
         batch_size, target_seq_len, src_seq_len,
@@ -339,15 +356,13 @@ void flashAttention(const std::vector<T> &h_q, const std::vector<T> &h_k,
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 
+    CUDA_CHECK(cudaMemcpy(ho.data(), d_o, o_size * sizeof(double), cudaMemcpyDeviceToHost));
 
-    CUDA_CHECK(cudaMemcpy(h_o.data(), d_o, o_size * sizeof(T), cudaMemcpyDeviceToHost));
-
-    for(auto x:h_o)
+    for(int i=0;i<h_o.size();i++)
     {
-        break;
-        // std::cout<<x<<" ";
+        h_o[i]=float(ho[i]);
     }
-    // std::cout<<std::endl;
+
     cudaFree(d_q);
     cudaFree(d_k);
     cudaFree(d_v);

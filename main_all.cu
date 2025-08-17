@@ -103,7 +103,7 @@ bool loadTestData(const std::string& filename,
 }
 
 
-int main()
+int mian(int fidx)
 {
     // 声明变量
     int batch_size, target_seq_len, src_seq_len, query_heads, kv_heads, head_dim;
@@ -111,8 +111,8 @@ int main()
     
     // 从文件加载测试数据
     std::vector<float> h_q, h_k, h_v;
-    
-    if (!loadTestData("./compare/input.tx", h_q, h_k, h_v,
+
+    if (!loadTestData("./out/" + std::to_string(fidx) + ".txt", h_q, h_k, h_v,
                       batch_size, target_seq_len, src_seq_len,
                       kv_heads, query_heads, head_dim, is_causal)) {
         std::cerr << "Failed to load test data" << std::endl;
@@ -130,7 +130,7 @@ int main()
                    query_heads, kv_heads, head_dim, is_causal);
     
     // 将结果输出到文件
-    std::ofstream outFile("./compare/out.test");
+    std::ofstream outFile("./out/" + std::to_string(fidx) + "_cpp.txt");
     if (!outFile.is_open()) {
         std::cerr << "Error: Cannot create out.test" << std::endl;
         return 1;
@@ -149,4 +149,10 @@ int main()
     std::cout << "Output generated successfully: out.test" << std::endl;
     
     return 0;
+}
+
+int main() {
+    for (int i = 0; i < 143; i++) {
+        mian(i);
+    }
 }

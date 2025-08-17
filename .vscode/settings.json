@@ -1,5 +1,6 @@
 {
     "files.associations": {
+        "*.dbclient-js": "javascript",
         "*.json": "jsonc",
         "array": "cpp",
         "atomic": "cpp",
@@ -61,6 +62,14 @@
         "thread": "cpp",
         "typeinfo": "cpp",
         "variant": "cpp",
-        "__nullptr": "cpp"
+        "__nullptr": "cpp",
+        "codecvt": "cpp",
+        "map": "cpp",
+        "set": "cpp",
+        "expected": "cpp",
+        "fstream": "cpp",
+        "shared_mutex": "cpp",
+        "cfenv": "cpp",
+        "cinttypes": "cpp"
     }
 }
