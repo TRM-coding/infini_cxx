@@ -280,23 +280,23 @@ void flashAttention(const std::vector<T> &h_q, const std::vector<T> &h_k,
                     int query_heads, int kv_heads, int head_dim, bool is_causal)
 {
     cudaSetDevice(6);
-    std::cout<<"batch_size:"<<batch_size<<std::endl
-    <<"target_seq_len:"<<target_seq_len<<std::endl
-    <<"src_seq_len:"<<src_seq_len<<std::endl
-    <<"query_head:"<<query_heads<<std::endl
-    <<"kv_head:"<<kv_heads<<std::endl
-    <<"head_dim:"<<head_dim<<std::endl
-    <<"is_causual:"<<is_causal<<std::endl;
+    // std::cout<<"batch_size:"<<batch_size<<std::endl
+    // <<"target_seq_len:"<<target_seq_len<<std::endl
+    // <<"src_seq_len:"<<src_seq_len<<std::endl
+    // <<"query_head:"<<query_heads<<std::endl
+    // <<"kv_head:"<<kv_heads<<std::endl
+    // <<"head_dim:"<<head_dim<<std::endl
+    // <<"is_causual:"<<is_causal<<std::endl;
 
     // std::cout<<"h_o_size:"<<h_o.size()<<std::endl;
 
-    if(query_heads%kv_heads!=0)
-    {
-        std::cout<<"bad heads"<<std::endl;
-    }
+    // if(query_heads%kv_heads!=0)
+    // {
+    //     std::cout<<"bad heads"<<std::endl;
+    // }
 
     int a;
-    std::cin>>a;
+    // std::cin>>a;
     for(auto p :h_q)
     {
         // std::cout<<p<<" ";
