@@ -1,15 +1,12 @@
 #include <vector>
 #include <iostream>
-#include <fstream>
 #include "../tester/utils.h"
 #include <cassert>
 #include <cfloat>
 #include <math_constants.h>
-// #include <cmath>
+#include <cmath>
 #include <algorithm>
 #include <cuda_runtime.h>
-#include <iomanip>
-// #define double long double
 /**
  * @brief Find the k-th largest element in a vector using CUDA.
  *
@@ -156,34 +153,6 @@ T kthLargest(const std::vector<T> &h_input, size_t k)
     return *ans;
 }
 
-template<typename T>
-__device__ void softmax(T* vec,int len)
-{
-    double sum_exp = 0.0f;
-    double max_score = -CUDART_INF_F;
-    for (int s = 0; s < len; ++s)
-    {
-        max_score = fmax(max_score, vec[s]);
-    }
-
-    for (int s = 0; s < len; ++s)
-    {
-        if (vec[s] == -CUDART_INF_F)
-        {
-            vec[s] = 0;
-            continue;
-        }
-        vec[s] = exp(vec[s] - max_score);
-        sum_exp += vec[s];
-    }
-
-    for (int s = 0; s < len; ++s)
-    {
-        vec[s] /= sum_exp;
-    }
-}
-
-
 /**
  * @brief Computes simple attention for given query, key, and value tensors.
  *
@@ -201,88 +170,97 @@ __device__ void softmax(T* vec,int len)
  * @param[in] is_causal Whether to apply causal masking
  */
 
-
-
-// Standard Attention CUDA kernel - supports grouped query attention
+// Batch-parallel Attention CUDA kernel - each thread processes one complete batch
 template <typename T>
 __global__ void flashAttentionKernel(
     const T *q, const T *k, const T *v, T *o,
     int batch_size, int target_seq_len, int src_seq_len,
     int query_heads, int kv_heads, int head_dim, bool is_causal)
 {
-    int batch_idx = blockIdx.z;
-    int query_head_idx = blockIdx.y;
-    // int target_idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int target_idx = threadIdx.x;
 
-    if (batch_idx >= batch_size || query_head_idx >= query_heads || target_idx >= target_seq_len)
-    {
+    int batch_idx = blockIdx.x;
+    int head_idx = threadIdx.x;
+
+    if (batch_idx >= batch_size || head_idx >= query_heads)
         return;
-    }
 
-    int kv_head_idx;
+    T scale_factor = T(1.0) / sqrtf(T(head_dim));
 
-    kv_head_idx = (query_head_idx * kv_heads) / query_heads;
+    int group = query_heads / kv_heads; // 需整除
+    int kv_head_idx = head_idx / group;
 
-    int q_batch_offset = batch_idx * query_heads * target_seq_len * head_dim;
-    int k_batch_offset = batch_idx * kv_heads * src_seq_len * head_dim;
-    int v_batch_offset = batch_idx * kv_heads * src_seq_len * head_dim;
-    int o_batch_offset = batch_idx * query_heads * target_seq_len * head_dim;
+    int q_offset = batch_idx * query_heads * target_seq_len * head_dim +
+                   head_idx * target_seq_len * head_dim;
+    int k_offset = batch_idx * kv_heads * src_seq_len * head_dim +
+                   kv_head_idx * src_seq_len * head_dim;
+    int v_offset = batch_idx * kv_heads * src_seq_len * head_dim +
+                   kv_head_idx * src_seq_len * head_dim;
+    int o_offset = batch_idx * query_heads * target_seq_len * head_dim +
+                   head_idx * target_seq_len * head_dim;
 
-    int q_head_offset = query_head_idx * target_seq_len * head_dim;
-    int kv_head_offset = kv_head_idx * src_seq_len * head_dim;
-    int o_head_offset = query_head_idx * target_seq_len * head_dim;
-
-    const T *current_q = q + q_batch_offset + q_head_offset + target_idx * head_dim;
-    const T *current_k_base = k + k_batch_offset + kv_head_offset;
-    const T *current_v_base = v + v_batch_offset + kv_head_offset;
-    T *current_o = o + o_batch_offset + o_head_offset + target_idx * head_dim;
-
-    double scale_factor = 1.0 / sqrt((double)head_dim);
-
-    double attn_scores[2048];
-
-    for (int s = 0; s < src_seq_len; ++s)
+    // Process each target position
+    for (int i = 0; i < target_seq_len; i++)
     {
-        const T *kp = current_k_base + s * head_dim;
+        // 建议：若 src_seq_len 可能 > 2048，请改在线 softmax，避免越界与溢栈
+        float logits[2048];              // 存放未归一化分数（FP32）
+        float max_score = -CUDART_INF_F; // 仅统计未遮罩元素
 
-        double score = 0.0f;
-        for (int d = 0; d < head_dim; ++d)
+        // pass 1: 计算 logits 与行内最大值（忽略被遮罩位置）
+        for (int j = 0; j < src_seq_len; j++)
         {
-            score += (double)current_q[d] * (double)kp[d];
+            bool masked = (is_causal && j > i); // PyTorch 的下三角语义
+            if (masked)
+            {
+                logits[j] = -CUDART_INF_F;
+                continue;
+            }
+            float score = 0.f;
+            for (int d = 0; d < head_dim; d++)
+            {
+                float qv = (float)q[q_offset + i * head_dim + d];
+                float kv = (float)k[k_offset + j * head_dim + d];
+                score += qv * kv;
+            }
+            score *= (1.f / sqrtf((float)head_dim)); // FP32 缩放
+            logits[j] = score;
+            max_score = fmaxf(max_score, score);
         }
 
-        attn_scores[s] = score * scale_factor;
-    }
-
-    if (is_causal)
-    {
-        for (int s = 0; s < src_seq_len; ++s)
+        // 整行全被遮罩：输出 0，继续下一行（避免 NaN）
+        if (!isfinite(max_score))
         {
-            if (s > target_idx)
+            for (int d = 0; d < head_dim; d++)
             {
-                attn_scores[s] = -CUDART_INF_F;
+                o[o_offset + i * head_dim + d] = (T)0.0f;
+            }
+            continue;
+        }
+
+        // pass 2: 计算分母（仅未遮罩），并直接累加到输出（避免第三遍）
+        float denom = 0.f;
+        for (int j = 0; j < src_seq_len; j++)
+        {
+            if (isfinite(logits[j]))
+            {
+                denom += expf(logits[j] - max_score);
             }
         }
-    }
-
-    
-
-    softmax(attn_scores, src_seq_len);
-
-    for (int d = 0; d < head_dim; ++d)
-    {
-        double output_val = 0.0f;
-        for (int s = 0; s < src_seq_len; ++s)
+        // 归一化并与 V 相乘（FP32 累加）
+        for (int d = 0; d < head_dim; d++)
         {
-            const T *vp = current_v_base + s * head_dim;
-            output_val += attn_scores[s] * (double)vp[d];
+            float out_val = 0.f;
+            for (int j = 0; j < src_seq_len; j++)
+            {
+                if (!isfinite(logits[j]))
+                    continue; // 跳过被遮罩
+                float w = expf(logits[j] - max_score) / denom;
+                float vv = (float)v[v_offset + j * head_dim + d];
+                out_val += w * vv;
+            }
+            o[o_offset + i * head_dim + d] = (T)out_val; // 若 T=half 请做显式转换
         }
-        current_o[d] = output_val;
     }
 }
-
-int idx = 0;
 
 template <typename T>
 void flashAttention(const std::vector<T> &h_q, const std::vector<T> &h_k,
@@ -290,71 +268,32 @@ void flashAttention(const std::vector<T> &h_q, const std::vector<T> &h_k,
                     int batch_size, int target_seq_len, int src_seq_len,
                     int query_heads, int kv_heads, int head_dim, bool is_causal)
 {
-    cudaSetDevice(0);
-    size_t q_size = h_q.size();
-    size_t k_size = h_k.size();
-    size_t v_size = h_v.size();
-    size_t o_size = h_o.size();
-    // std::cout << std::fixed << std::setprecision(12) << "\n"; 
-    // for(auto x:h_q)
-    // {
-        // std::cout<<x<<" ";
-    // }
-    // std::cin>>a;
+    // Allocate device memory
+    T *d_q, *d_k, *d_v, *d_o;
+    std::cout << src_seq_len << ":" << target_seq_len << std::endl;
 
-    // std::ofstream f("out/" + std::to_string(idx++) + ".txt");
-    // f << std::fixed << std::setprecision(7);
-    // f << batch_size << " " << target_seq_len << " " << src_seq_len << " " << kv_heads << " " << query_heads << " " << head_dim << " " << (is_causal ? 1 : 0) << std::endl;
-    // for (auto x : h_q)
-    // {
-    //     f << x << " ";
-    // }
-    // f << std::endl;
-    // for (auto x : h_k)
-    // {
-    //     f << x << " ";
-    // }
-    // f << std::endl;
-    // for (auto x : h_v)
-    // {
-    //     f << x << " ";
-    // }
-    // f << std::endl;
-    // f << std::fixed << std::setprecision(12) << "\n";
-    // for (auto x : h_q)
-    // {
-    //     f << x << " ";
-    // }
-    // f.close();
+    size_t q_size = h_q.size() * sizeof(T);
+    size_t k_size = h_k.size() * sizeof(T);
+    size_t v_size = h_v.size() * sizeof(T);
+    size_t o_size = h_o.size() * sizeof(T);
 
-    std::vector<double> hk, hv, hq, ho;
+    CUDA_CHECK(cudaMalloc(&d_q, q_size));
+    CUDA_CHECK(cudaMalloc(&d_k, k_size));
+    CUDA_CHECK(cudaMalloc(&d_v, v_size));
+    CUDA_CHECK(cudaMalloc(&d_o, o_size));
 
-    for(auto x:h_k)hk.push_back(static_cast<double>(x));
-    for(auto x:h_q)hq.push_back(static_cast<double>(x));
-    for(auto x:h_v)hv.push_back(static_cast<double>(x));
-    ho.resize(h_o.size());
+    // Copy input data to device
+    CUDA_CHECK(cudaMemcpy(d_q, h_q.data(), q_size, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_k, h_k.data(), k_size, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_v, h_v.data(), v_size, cudaMemcpyHostToDevice));
 
-    double *d_q, *d_k, *d_v,*d_o;
+    // Configure kernel launch parameters
+    // Each block processes one batch, each thread processes one head
+    dim3 grid(batch_size);
+    dim3 block(query_heads);
 
-    CUDA_CHECK(cudaMalloc(&d_q, q_size * sizeof(double)));
-    CUDA_CHECK(cudaMalloc(&d_k, k_size * sizeof(double)));
-    CUDA_CHECK(cudaMalloc(&d_v, v_size * sizeof(double)));
-    CUDA_CHECK(cudaMalloc(&d_o, o_size * sizeof(double)));
-
-    CUDA_CHECK(cudaMemcpy(d_q, hq.data(), q_size * sizeof(double), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(d_k, hk.data(), k_size * sizeof(double), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(d_v, hv.data(), v_size * sizeof(double), cudaMemcpyHostToDevice));
-
-    int threads_per_block = 1024;
-
-    dim3 block_size(threads_per_block);
-    dim3 grid_size(
-        (target_seq_len + threads_per_block - 1) / threads_per_block, // x: target sequence length
-        query_heads,                                                  // y: query heads
-        batch_size                                                    // z: batch size
-    );
-
-    flashAttentionKernel<<<grid_size, block_size>>>(
+    // Launch kernel
+    flashAttentionKernel<<<grid, block>>>(
         d_q, d_k, d_v, d_o,
         batch_size, target_seq_len, src_seq_len,
         query_heads, kv_heads, head_dim, is_causal);
@@ -362,20 +301,15 @@ void flashAttention(const std::vector<T> &h_q, const std::vector<T> &h_k,
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    CUDA_CHECK(cudaMemcpy(ho.data(), d_o, o_size * sizeof(double), cudaMemcpyDeviceToHost));
+    // Copy result back to host
+    CUDA_CHECK(cudaMemcpy(h_o.data(), d_o, o_size, cudaMemcpyDeviceToHost));
 
-    for(int i=0;i<h_o.size();i++)
-    {
-        h_o[i]=float(ho[i]);
-    }
-
-    cudaFree(d_q);
-    cudaFree(d_k);
-    cudaFree(d_v);
-    cudaFree(d_o);
-}
-
-// *********************************************************************
+    // Free device memory
+    CUDA_CHECK(cudaFree(d_q));
+    CUDA_CHECK(cudaFree(d_k));
+    CUDA_CHECK(cudaFree(d_v));
+    CUDA_CHECK(cudaFree(d_o));
+} // *********************************************************************
 // Explicit Template Instantiations (REQUIRED FOR LINKING WITH TESTER.O)
 // DO NOT MODIFY THIS SECTION
 // *********************************************************************
