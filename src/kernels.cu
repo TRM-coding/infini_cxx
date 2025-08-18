@@ -295,7 +295,7 @@ void flashAttention(const std::vector<T> &h_q, const std::vector<T> &h_k,
                     int batch_size, int target_seq_len, int src_seq_len,
                     int query_heads, int kv_heads, int head_dim, bool is_causal)
 {
-    cudaSetDevice(3);
+    cudaSetDevice(0);
     size_t q_size = h_q.size();
     size_t k_size = h_k.size();
     size_t v_size = h_v.size();
@@ -344,7 +344,7 @@ void flashAttention(const std::vector<T> &h_q, const std::vector<T> &h_k,
     CUDA_CHECK(cudaMemcpy(d_v, h_v.data(), v_size * sizeof(float), cudaMemcpyHostToDevice));
 
     cudaDeviceProp prop;
-    cudaGetDeviceProperties(&prop, 3);
+    cudaGetDeviceProperties(&prop, 0);
 
     int threads_per_block = prop.maxThreadsPerBlock;
 
