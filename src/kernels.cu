@@ -235,7 +235,7 @@ void flashAttention(const std::vector<T> &h_q, const std::vector<T> &h_k,
                     int batch_size, int target_seq_len, int src_seq_len,
                     int query_heads, int kv_heads, int head_dim, bool is_causal)
 {
-    cudaSetDevice(0);
+    cudaSetDevice(3);
     size_t q_size = h_q.size();
     size_t k_size = h_k.size();
     size_t v_size = h_v.size();
