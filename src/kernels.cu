@@ -59,6 +59,7 @@ __device__ void merge(T *data, size_t left, size_t mid, size_t right, T *temp)
 template <typename T>
 __device__ void iterative_merge_sort(T *data, size_t n, T *temp)
 {
+    // Deprecated: kept for reference; replaced by parallel merge passes launched from host
     for (size_t curr_size = 1; curr_size < n; curr_size *= 2)
     {
         for (size_t left_start = 0; left_start < n - 1; left_start += 2 * curr_size)
@@ -73,11 +74,43 @@ __device__ void iterative_merge_sort(T *data, size_t n, T *temp)
         }
     }
 }
+
+// Each block merges one pair of sorted runs of size `width` from `in` into `out`.
+// Runs are contiguous: [start, mid) and [mid, end), where start = blockIdx.x * 2*width
 template <typename T>
-__global__ void KernelKthLargest(T *data, T *ans, size_t length, size_t k, T *temp)
+__global__ void mergePassKernel(const T *in, T *out, size_t n, size_t width)
 {
-    iterative_merge_sort(data, length, temp);
-    *ans = data[length - k];
+    size_t start = blockIdx.x * (2 * width);
+    if (start >= n)
+        return;
+
+    size_t mid = min(start + width, n);
+    size_t end = min(start + 2 * width, n);
+
+    size_t i = start;
+    size_t j = mid;
+    size_t k = start;
+
+    // Sequential merge within a block; multiple blocks run in parallel across the array
+    while (i < mid && j < end)
+    {
+        if (in[i] <= in[j])
+        {
+            out[k++] = in[i++];
+        }
+        else
+        {
+            out[k++] = in[j++];
+        }
+    }
+    while (i < mid)
+    {
+        out[k++] = in[i++];
+    }
+    while (j < end)
+    {
+        out[k++] = in[j++];
+    }
 }
 
 template <typename T>
@@ -87,26 +120,48 @@ T kthLargest(const std::vector<T> &h_input, size_t k)
     {
         return T(-100);
     }
-    // TODO: Implement the kthLargest function
+    // Parallel bottom-up merge sort with per-pass GPU kernels
     const int device = 0;
-    cudaSetDevice(device);
-    T *data = nullptr;
-    T *ans = new T;
-    T *cudaans = nullptr;
-    T *temp = nullptr;
-    const size_t DATA_SIZE = h_input.size();
-    const size_t BYTE_SIZE = DATA_SIZE * sizeof(T);
-    CUDA_CHECK(cudaMalloc(&data, BYTE_SIZE));
-    CUDA_CHECK(cudaMalloc(&cudaans, sizeof(T)));
-    CUDA_CHECK(cudaMalloc(&temp, BYTE_SIZE));
-    CUDA_CHECK(cudaMemcpy(data, h_input.data(), BYTE_SIZE, cudaMemcpyHostToDevice));
-    cudaDeviceProp prop;
-    CUDA_CHECK(cudaGetDeviceProperties(&prop, device));
-    KernelKthLargest<<<1, 1>>>(data, cudaans, size_t(h_input.size()), k, temp);
-    CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
-    CUDA_CHECK(cudaMemcpy(ans, cudaans, sizeof(T), cudaMemcpyDeviceToHost));
-    return *ans;
+    CUDA_CHECK(cudaSetDevice(device));
+
+    const size_t n = h_input.size();
+    const size_t bytes = n * sizeof(T);
+
+    T *d_in = nullptr;
+    T *d_out = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_in, bytes));
+    CUDA_CHECK(cudaMalloc(&d_out, bytes));
+    CUDA_CHECK(cudaMemcpy(d_in, h_input.data(), bytes, cudaMemcpyHostToDevice));
+
+    // Iteratively double run width; each kernel launch merges all pairs of runs of current width
+    size_t width = 1;
+    // Use 1 thread per block (sequential merge within block), many blocks across array
+    dim3 block(1);
+    while (width < n)
+    {
+        size_t numMerges = (n + (2 * width) - 1) / (2 * width);
+        dim3 grid((unsigned int)numMerges);
+        mergePassKernel<T><<<grid, block>>>(d_in, d_out, n, width);
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        // Ping-pong buffers
+        T *tmp = d_in;
+        d_in = d_out;
+        d_out = tmp;
+
+        width <<= 1;
+    }
+
+    // After loop, sorted data is in d_in due to final swap
+    T result{};
+    size_t idx = n - k; // 0-based index of k-th largest in ascending-sorted array
+    CUDA_CHECK(cudaMemcpy(&result, d_in + idx, sizeof(T), cudaMemcpyDeviceToHost));
+
+    cudaFree(d_in);
+    cudaFree(d_out);
+
+    return result;
 }
 
 template <typename T>
