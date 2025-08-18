@@ -183,7 +183,7 @@ __global__ void flashAttentionKernel(
     const T *current_q = q + q_batch_offset + (size_t)target_idx * query_heads * head_dim + (size_t)query_head_idx * head_dim;
     T *current_o = o + o_batch_offset + (size_t)target_idx * query_heads * head_dim + (size_t)query_head_idx * head_dim;
 
-    float scale_factor = 1.0 / sqrtf((float)head_dim);
+    float scale_factor = 1.0 / sqrt((float)head_dim);
 
     float attn_scores[2048];
 
