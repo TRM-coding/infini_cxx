@@ -164,7 +164,6 @@ __global__ void flashAttentionKernel(
 {
     size_t batch_idx = blockIdx.y;
     size_t query_head_idx = blockIdx.x;
-    // size_t target_idx = (size_t)blockIdx.x * (size_t)blockDim.x + (size_t)threadIdx.x;
     size_t target_idx = threadIdx.x;
 
     if (batch_idx >= batch_size || query_head_idx >= query_heads || target_idx >= target_seq_len)
@@ -179,51 +178,57 @@ __global__ void flashAttentionKernel(
     size_t v_batch_offset = (size_t)batch_idx * src_seq_len * kv_heads * head_dim;
     size_t o_batch_offset = (size_t)batch_idx * target_seq_len * query_heads * head_dim;
 
-
     const T *current_q = q + q_batch_offset + (size_t)target_idx * query_heads * head_dim + (size_t)query_head_idx * head_dim;
     T *current_o = o + o_batch_offset + (size_t)target_idx * query_heads * head_dim + (size_t)query_head_idx * head_dim;
 
-    float scale_factor = 1.0 / sqrt((float)head_dim);
+    float scale_factor = 1.0f / sqrtf((float)head_dim);
 
-    float attn_scores[2048];
+    // Flash Attention 状态变量
+    float m = -CUDART_INF_F;  // 当前最大值
+    float l = 0.0f;           // 当前指数和
+    
+    // 初始化输出为0
+    for (int d = 0; d < head_dim; ++d)
+    {
+        current_o[d] = 0.0f;
+    }
 
+    // Flash Attention 主循环 - 逐个处理每个key-value对
     for (int s = 0; s < src_seq_len; ++s)
     {
-        const T *kp = k + k_batch_offset + (size_t)s * kv_heads * head_dim + (size_t)kv_head_idx * head_dim;
+        // 检查causal masking
+        if (is_causal && s > target_idx)
+        {
+            continue;
+        }
 
+        const T *kp = k + k_batch_offset + (size_t)s * kv_heads * head_dim + (size_t)kv_head_idx * head_dim;
+        const T *vp = v + v_batch_offset + (size_t)s * kv_heads * head_dim + (size_t)kv_head_idx * head_dim;
+
+        // 计算当前的注意力分数
         float score = 0.0f;
         for (int d = 0; d < head_dim; ++d)
         {
             score += (float)current_q[d] * (float)kp[d];
         }
+        score *= scale_factor;
 
-        attn_scores[s] = score * scale_factor;
-    }
-
-    if (is_causal)
-    {
-        for (int s = 0; s < src_seq_len; ++s)
+        // Flash Attention 更新逻辑
+        float m_new = fmaxf(m, score);
+        float alpha = expf(m - m_new);
+        float beta = expf(score - m_new);
+        
+        float l_new = alpha * l + beta;
+        
+        // 更新输出 O = (l * O + beta * V) / l_new
+        for (int d = 0; d < head_dim; ++d)
         {
-            if (s > target_idx)
-            {
-                attn_scores[s] = -CUDART_INF_F;
-            }
+            current_o[d] = (alpha * l * current_o[d] + beta * (float)vp[d]) / l_new;
         }
-    }
-
-    softmax(attn_scores, src_seq_len);
-
-    for (int d = 0; d < head_dim; ++d)
-    {
-        float output_val = 0.0f;
-        for (int s = 0; s < src_seq_len; ++s)
-        {
-            const T *vp = v + v_batch_offset
-                            + (size_t)s * kv_heads * head_dim
-                            + (size_t)kv_head_idx * head_dim;
-            output_val += attn_scores[s] * (float)vp[d];
-        }
-        current_o[d] = output_val;
+        
+        // 更新状态
+        m = m_new;
+        l = l_new;
     }
 }
 
@@ -272,16 +277,6 @@ void flashAttention(const std::vector<T> &h_q, const std::vector<T> &h_k,
     // }
     // f.close();
 
-    std::vector<float> hk, hv, hq, ho;
-
-    for (auto x : h_k)
-        hk.push_back(static_cast<float>(x));
-    for (auto x : h_q)
-        hq.push_back(static_cast<float>(x));
-    for (auto x : h_v)
-        hv.push_back(static_cast<float>(x));
-    ho.resize(h_o.size());
-
     float *d_q, *d_k, *d_v, *d_o;
 
     CUDA_CHECK(cudaMalloc(&d_q, q_size * sizeof(float)));
@@ -289,11 +284,14 @@ void flashAttention(const std::vector<T> &h_q, const std::vector<T> &h_k,
     CUDA_CHECK(cudaMalloc(&d_v, v_size * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_o, o_size * sizeof(float)));
 
-    CUDA_CHECK(cudaMemcpy(d_q, hq.data(), q_size * sizeof(float), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(d_k, hk.data(), k_size * sizeof(float), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(d_v, hv.data(), v_size * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_q, h_q.data(), q_size * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_k, h_k.data(), k_size * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_v, h_v.data(), v_size * sizeof(float), cudaMemcpyHostToDevice));
 
-    int threads_per_block = 1024;
+    cudaDeviceProp prop;
+    cudaGetDeviceProperties(&prop, 3);
+
+    int threads_per_block = prop.maxThreadsPerBlock;
 
     dim3 block_size(threads_per_block);
     dim3 grid_size(query_heads, batch_size);
@@ -306,12 +304,8 @@ void flashAttention(const std::vector<T> &h_q, const std::vector<T> &h_k,
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    CUDA_CHECK(cudaMemcpy(ho.data(), d_o, o_size * sizeof(float), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(h_o.data(), d_o, o_size * sizeof(float), cudaMemcpyDeviceToHost));
 
-    for (size_t i = 0; i < h_o.size(); i++)
-    {
-        h_o[i] = float(ho[i]);
-    }
 
     cudaFree(d_q);
     cudaFree(d_k);
