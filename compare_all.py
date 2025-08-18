@@ -52,8 +52,8 @@ def mian(fidx):
     # print(f"Loaded {len(out_data)} values from out.test")
     
     # 定义误差阈值
-    # tolerances = [1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6,1e-7]
-    tolerances = [1e-1, 1e-2, 1e-3, 1e-4, 1e-5]
+    tolerances = [1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6,1e-7]
+    # tolerances = [1e-1, 1e-2, 1e-3, 1e-4, 1e-5]
     
     for tolerance in tolerances:
         mismatches = compare_data(ans_data, out_data, tolerance)

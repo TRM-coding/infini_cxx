@@ -4,12 +4,8 @@
         {
             "label": "build cuda main",
             "type": "shell",
-            "command": "srun",
+            "command": "nvcc",
             "args": [
-                "--gres=gpu:nvidia:2",
-                "--cpus-per-task=16",
-                "--mem=256G",
-                "nvcc",
                 "-o",
                 "${workspaceFolder}/main",
                 "${workspaceFolder}/main.cu",
@@ -34,13 +30,7 @@
         {
             "label": "run cuda main",
             "type": "shell",
-            "command": "srun",
-            "args": [
-                "--gres=gpu:nvidia:2",
-                "--cpus-per-task=16",
-                "--mem=256G",
-                "${workspaceFolder}/main"
-            ],
+            "command": "${workspaceFolder}/main",
             "group": {
                 "kind": "test",
                 "isDefault": true
@@ -71,12 +61,8 @@
         {
             "label": "run python tester",
             "type": "shell",
-            "command": "srun",
+            "command": "python",
             "args": [
-                "--gres=gpu:nvidia:2",
-                "--cpus-per-task=16",
-                "--mem=256G",
-                "python",
                 "tester.py"
             ],
             "group": "test",
@@ -91,13 +77,7 @@
         {
             "label": "run cuda with test data",
             "type": "shell",
-            "command": "srun",
-            "args": [
-                "--gres=gpu:nvidia:2",
-                "--cpus-per-task=16",
-                "--mem=256G",
-                "${workspaceFolder}/main"
-            ],
+            "command": "${workspaceFolder}/main",
             "group": "test",
             "presentation": {
                 "echo": true,

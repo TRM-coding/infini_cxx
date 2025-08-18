@@ -50,10 +50,9 @@ def mian(fidx):
     assert len(h_v) == B*kvH*S*Dh, f"h_v length mismatch: expected {B*kvH*S*Dh}, got {len(h_v)}"
 
     # 构造张量
-    q = torch.tensor(h_q, dtype=torch.float64).view(B, qH, Tq, Dh)
-    k = torch.tensor(h_k, dtype=torch.float64).view(B, kvH, S, Dh)
-    v = torch.tensor(h_v, dtype=torch.float64).view(B, kvH, S, Dh)
-
+    q = torch.tensor(h_q, dtype=torch.float32).view(B, Tq, qH, Dh).transpose(-2,-3)
+    k = torch.tensor(h_k, dtype=torch.float32).view(B, S, kvH, Dh).transpose(-2,-3)
+    v = torch.tensor(h_v, dtype=torch.float32).view(B, S, kvH, Dh).transpose(-2,-3)
     # GQA：将 K/V 沿 head 维复制到与 qH 对齐
     group_size = qH // kvH
     assert qH % kvH == 0, f"qH ({qH}) must be divisible by kvH ({kvH})"
@@ -63,6 +62,8 @@ def mian(fidx):
     # 计算 SDPA（等价于缩放点积注意力），默认 scale=1/sqrt(Dh)
 
     o = F.scaled_dot_product_attention(q, k, v, is_causal=bool(is_causal), dropout_p=0.0, enable_gqa=True)  # [B, qH, Tq, Dh]
+
+    o=o.to(torch.float32).transpose(-2,-3)
 
     # 将结果写入文件，只输出数值，保留6位小数，空格分隔
     with open(f"out/{fidx}_pytorch.txt", "w") as f:

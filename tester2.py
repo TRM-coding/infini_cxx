@@ -1,7 +1,6 @@
 import torch
 import math
 
-#softmax((QK^T)/sqrt(head_dim))V
 def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0,
         is_causal=False, scale=None, enable_gqa=False) -> torch.Tensor:
     L, S = query.size(-2), key.size(-2)
@@ -23,22 +22,13 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
         key = key.repeat_interleave(query.size(-3)//key.size(-3), -3)
         value = value.repeat_interleave(query.size(-3)//value.size(-3), -3)
 
-    # query = query.to(torch.float64)
-    # key = key.to(torch.float64)
-    # value = value.to(torch.float64)
-    # attn_bias = attn_bias.to(torch.float64)
-
-    print("max_query:",query.max().item()," max_key:",key.max().item()," max_value:",value.max().item())
-    print("min_query:",query.min().item()," min_key:",key.min().item()," min_value:",value.min().item()) 
-    print(scale_factor)  
-    print(query.shape)
-    attn_weight = (query.to(torch.float64) @ key.transpose(-2, -1).to(torch.float64)).to(torch.float64) * scale_factor + attn_bias
-    attn_weight = torch.softmax(attn_weight.to(torch.float64), dim=-1).to(torch.float64)
-    # attn_weight = torch.softmax(query @ (key.transpose(-2, -1) * scale_factor) + attn_bias, dim=-1)
-    # attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
-    # return attn_weight @ v
-    # alue
+    attn_weight = query @ key.transpose(-2, -1) * scale_factor
+    attn_weight += attn_bias
+    attn_weight = torch.softmax(attn_weight, dim=-1)
+    attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
     return attn_weight @ value
+
+
 
 
 import torch
@@ -91,9 +81,9 @@ assert len(h_k) == B*kvH*S*Dh, f"h_k length mismatch: expected {B*kvH*S*Dh}, got
 assert len(h_v) == B*kvH*S*Dh, f"h_v length mismatch: expected {B*kvH*S*Dh}, got {len(h_v)}"
 
 # 构造张量
-q = torch.tensor(h_q, dtype=torch.float64).view(B, qH, Tq, Dh)
-k = torch.tensor(h_k, dtype=torch.float64).view(B, kvH, S, Dh)
-v = torch.tensor(h_v, dtype=torch.float64).view(B, kvH, S, Dh)
+q = torch.tensor(h_q, dtype=torch.float64).view(B, Tq, qH, Dh).transpose(-2,-3)
+k = torch.tensor(h_k, dtype=torch.float64).view(B, S, kvH, Dh).transpose(-2,-3)
+v = torch.tensor(h_v, dtype=torch.float64).view(B, S, kvH, Dh).transpose(-2,-3)
 
 # GQA：将 K/V 沿 head 维复制到与 qH 对齐
 group_size = qH // kvH
@@ -104,13 +94,15 @@ assert qH % kvH == 0, f"qH ({qH}) must be divisible by kvH ({kvH})"
 
 o = scaled_dot_product_attention(q, k, v, is_causal=bool(is_causal), dropout_p=0.0, enable_gqa=True)  # [B, qH, Tq, Dh]
 
+o=o.transpose(-2,-3)
+
 # 将结果写入文件，只输出数值，保留6位小数，空格分隔
 with open("compare/out.test", "w") as f:
     # 获取扁平化数据
     o_flat = o.contiguous().view(-1).tolist()
     
     # 写入数据，保留6位小数，空格分隔
-    output_str = ' '.join([f"{x:.6f}" for x in o_flat])
+    output_str = ' '.join([f"{x:.9f}" for x in o_flat])
     f.write(output_str)
 
 print("Answer generated successfully: answer.test")
